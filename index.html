@@ -11,7 +11,8 @@
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=JetBrains+Mono:wght@500;600&family=Lexend:wght@400;500;600&display=swap">
+<link rel="stylesheet" media="print" onload="this.media='all'" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=JetBrains+Mono:wght@500;600&family=Lexend:wght@400;500;600&display=swap">
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=JetBrains+Mono:wght@500;600&family=Lexend:wght@400;500;600&display=swap"></noscript>
 <style>
 /* Tata letak: lembar ujian satu kolom seperti kertas LJK; saat mengerjakan, soal di kiri dan lembar jawaban di kanan (di bawah pada ponsel); panel guru lebih lebar. */
 :root {
@@ -570,9 +571,11 @@ label { cursor: pointer; }
     var fokus = o.querySelector('[data-autofocus]');
     if (fokus) fokus.focus();
   }
+  var busyT = null;
   function closeModal() {
+    clearTimeout(busyT);
     var o = $('#overlay');
-    o.hidden = true; o.innerHTML = ''; o.setAttribute('data-kind', '');
+    o.hidden = true; o.innerHTML = ''; o.setAttribute('data-kind', ''); o.style.background = '';
   }
   function confirmBox(o) {
     return new Promise(function (resolve) {
@@ -583,7 +586,14 @@ label { cursor: pointer; }
     });
   }
   function busy(teks) {
-    openModal('<div class="spin" aria-hidden="true"></div><p>' + esc(teks) + '</p>', { cls: 'busy', kind: 'busy' });
+    // Lapisan tunggu baru tampil jika server belum menjawab dalam 350 ms, agar tidak berkedip.
+    closeModal();
+    var o = $('#overlay');
+    o.innerHTML = ''; o.setAttribute('data-kind', 'busy'); o.style.background = 'transparent'; o.hidden = false;
+    busyT = setTimeout(function () {
+      o.style.background = '';
+      openModal('<div class="spin" aria-hidden="true"></div><p>' + esc(teks) + '</p>', { cls: 'busy', kind: 'busy' });
+    }, 350);
   }
   var toastT = null;
   function toast(msg, tone) {
@@ -609,15 +619,20 @@ label { cursor: pointer; }
     var e = $('#lgErr');
     e.hidden = !pesan; e.textContent = pesan || '';
     $('#btnLogin').disabled = false; $('#btnLogin').textContent = 'Masuk';
+    var tampilInfo = function (r) {
+      document.title = r.judul;
+      $('#lgJudul').textContent = r.judul;
+      $('#lgSekolah').textContent = r.sekolah || 'Ujian berbasis komputer';
+      $('#lgMapel').textContent = [r.mapel, r.kelas ? 'Kelas ' + r.kelas : ''].filter(Boolean).join(' · ');
+    };
+    try { var lama = JSON.parse(localStorage.getItem('cbt-info') || 'null'); if (lama && lama.judul) tampilInfo(lama); } catch (err) { /* abaikan */ }
     api('apiInfo').then(function (r) {
       if (!r.ok) {
         if (!lewatGas() && !API_URL_SAH && !pesan) { e.textContent = r.msg; e.hidden = false; }
         return;
       }
-      document.title = r.judul;
-      $('#lgJudul').textContent = r.judul;
-      $('#lgSekolah').textContent = r.sekolah || 'Ujian berbasis komputer';
-      $('#lgMapel').textContent = [r.mapel, r.kelas ? 'Kelas ' + r.kelas : ''].filter(Boolean).join(' · ');
+      tampilInfo(r);
+      try { localStorage.setItem('cbt-info', JSON.stringify({ judul: r.judul, sekolah: r.sekolah, mapel: r.mapel, kelas: r.kelas })); } catch (err) { /* abaikan */ }
     });
   }
   function keluar(pesan) {
@@ -637,7 +652,7 @@ label { cursor: pointer; }
       if (!r.ok) { err.textContent = r.msg; err.hidden = false; return; }
       $('#inPass').value = '';
       S.token = r.token; S.peran = r.peran;
-      if (r.peran === 'guru') bukaGuru(); else muatStatus();
+      if (r.peran === 'guru') bukaGuru(r.data); else if (r.status) terapkanStatus(r.status); else muatStatus();
     });
   });
   $('#btnPw').addEventListener('click', function () {
@@ -656,10 +671,14 @@ label { cursor: pointer; }
         toast(r.msg, 'bad');
         return keHalamanMasuk(r.msg);
       }
-      S.status = r;
-      if (r.tahap === 'SELESAI') return tampilHasil(r.hasil);
-      renderInfo(r);
+      terapkanStatus(r);
     });
+  }
+  function terapkanStatus(r) {
+    closeModal();
+    S.status = r;
+    if (r.tahap === 'SELESAI') return tampilHasil(r.hasil);
+    renderInfo(r);
   }
 
   function renderInfo(r) {
@@ -835,7 +854,7 @@ label { cursor: pointer; }
   function tandaiUbah() {
     Simpan.dirty = true; setSave('pending');
     clearTimeout(Simpan.t);
-    Simpan.t = setTimeout(kirimSimpan, 400);
+    Simpan.t = setTimeout(kirimSimpan, 2000);
   }
   function kirimSimpan() {
     if (!S.exam || S.ending) return;
@@ -1028,7 +1047,7 @@ label { cursor: pointer; }
   }
 
   /* ---------- Panel guru ---------- */
-  function bukaGuru() {
+  function bukaGuru(awal) {
     show('vGuru');
     $('#vGuru').innerHTML = '<header class="ghead" id="gHead"><div class="gh-t"><p class="eyebrow">Panel guru</p><h1>Memuat…</h1></div></header>' +
       '<nav class="tabs" role="tablist" aria-label="Menu panel guru">' +
@@ -1037,22 +1056,27 @@ label { cursor: pointer; }
         }).join('') +
       '</nav><div id="gBody"></div>';
     G.rendered = '';
-    muatGuru();
+    if (awal && awal.ringkasan) terimaGuru(awal); else muatGuru();
     clearInterval(G.timer);
     G.timer = setInterval(function () {
-      if (S.peran === 'guru' && G.tab === 'pantau' && document.visibilityState === 'visible' && $('#overlay').hidden) muatGuru(true);
+      if (S.peran === 'guru' && G.tab === 'pantau' && !G.memuat && document.visibilityState === 'visible' && $('#overlay').hidden) muatGuru(true);
     }, 15000);
   }
+  function terimaGuru(r) {
+    G.data = r; G.waktu = Date.now();
+    renderGuruHead();
+    renderTab();
+  }
   function muatGuru(diam) {
+    G.memuat = true;
     return api('apiGuruData', S.token).then(function (r) {
+      G.memuat = false;
       if (!r.ok) {
         if (r.code === 'SESI') return keluar(r.msg);
         if (!diam) toast(r.msg, 'bad');
         return;
       }
-      G.data = r; G.waktu = Date.now();
-      renderGuruHead();
-      renderTab();
+      terimaGuru(r);
     });
   }
   function renderGuruHead() {
